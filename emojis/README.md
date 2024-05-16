@@ -1,6 +1,7 @@
 # emojis
 
 * Run `brew install gimp`
+* Get a transparent background, 64x64 (or 128x128) size of the target.
 * Run the following (replacing with pathname where appropriate):
 ```sh
 gimp -idf --batch-interpreter python-fu-eval \
