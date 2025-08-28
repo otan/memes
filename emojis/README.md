@@ -2,6 +2,7 @@
 
 * Run `brew install gimp`
 * Get a transparent background, 64x64 (or 128x128) size of the target.
+  * images should be an unindexed PNG. if they aren't, my quick trick is to convert to webp and back
 * Run the following (replacing with pathname where appropriate):
 ```sh
 gimp -idf --batch-interpreter python-fu-eval \
