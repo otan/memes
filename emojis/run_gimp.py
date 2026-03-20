@@ -1,141 +1,254 @@
-from random import randint
-import os
-from gimpfu import *
+"""
+GIF generators for emoji frames. Targets GIMP 3.x (PyGObject), not legacy gimpfu / GIMP 2.
+Run only via GIMP batch (see run_emojis.sh).
+"""
 
-def outputFilename(inFile, ext):
-    return os.path.splitext(inFile)[0] + "-{}.gif".format(ext)
+from __future__ import annotations
+
+import math
+import os
+import sys
+from random import randint
+
+try:
+    import gi
+
+    gi.require_version("Gimp", "3.0")
+    gi.require_version("Gegl", "0.4")
+    from gi.repository import Gegl, Gimp, Gio
+except (ImportError, ValueError, OSError) as e:
+    print(
+        "Could not load GIMP 3 Python bindings (gi.repository.Gimp).\n"
+        "This script must run inside GIMP batch mode, not plain Python.\n\n"
+        "  cd emojis && ./run_emojis.sh /path/to/image.png\n\n"
+        f"Import error: {e}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def output_filename(in_file: str, ext: str) -> str:
+    return os.path.splitext(in_file)[0] + "-{}.gif".format(ext)
+
 
 num_colors = 48
 
-def intensifies(inFile):
-    img = pdb.file_png_load(inFile, 1)
-    outfile = outputFilename(inFile, "intensifies")
+
+def _load_png(path: str) -> Gimp.Image:
+    proc = Gimp.get_pdb().lookup_procedure("file-png-load")
+    config = proc.create_config()
+    config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    config.set_property("file", Gio.File.new_for_path(path))
+    result = proc.run(config)
+    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
+        raise RuntimeError(f"file-png-load failed for {path}: {result.index(1)}")
+    return result.index(1)
+
+
+def _save_gif_animated(
+    image: Gimp.Image,
+    outfile: str,
+    frame_time_ms: int,
+    replace_frames: bool,
+) -> None:
+    proc = Gimp.get_pdb().lookup_procedure("file-gif-export")
+    if proc is None:
+        raise RuntimeError("file-gif-export procedure not found")
+    config = proc.create_config()
+    config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    config.set_property("image", image)
+    config.set_property("file", Gio.File.new_for_path(outfile))
+    config.set_property("options", None)
+    arg_names = {p.name for p in proc.get_arguments()}
+    if "metadata" in arg_names:
+        config.set_property("metadata", None)
+    config.set_property("interlace", False)
+    config.set_property("loop", True)
+    config.set_property("number-of-repeats", 0)
+    config.set_property("default-delay", frame_time_ms)
+    config.set_property("default-dispose", "replace" if replace_frames else "combine")
+    config.set_property("as-animation", True)
+    config.set_property("force-delay", True)
+    config.set_property("force-dispose", True)
+    result = proc.run(config)
+    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
+        err = result.index(1) if result.get_n_values() > 1 else "unknown error"
+        raise RuntimeError(f"file-gif-export failed for {outfile}: {err}")
+
+
+def _plug_in_tile(image: Gimp.Image, drawable: Gimp.Drawable, new_w: int, new_h: int, new_image: bool) -> None:
+    proc = Gimp.get_pdb().lookup_procedure("plug-in-tile")
+    if proc is None:
+        raise RuntimeError("plug-in-tile procedure not found")
+    config = proc.create_config()
+    config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    config.set_property("image", image)
+    config.set_core_object_array("drawables", [drawable])
+    config.set_property("new-width", new_w)
+    config.set_property("new-height", new_h)
+    config.set_property("new-image", new_image)
+    result = proc.run(config)
+    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
+        err = result.index(1) if result.get_n_values() > 1 else "unknown error"
+        raise RuntimeError(f"plug-in-tile failed: {err}")
+
+
+def _layers_top_to_bottom(img: Gimp.Image):
+    return img.get_layers()
+
+
+def _insert_layer_top(img: Gimp.Image, layer: Gimp.Layer) -> None:
+    img.insert_layer(layer, None, 0)
+
+
+def intensifies(in_file: str) -> None:
+    img = _load_png(in_file)
+    outfile = output_filename(in_file, "intensifies")
     horiz_displace_pct = 17
     vert_displace_pct = 17
-    frame_time_ms = 20 # Must be multiple of 10 per the GIF standard
-    replacement_policy = 2 # 1=combine, 2=replace
+    frame_time_ms = 20
+    replace_frames = True
 
-    # Tune these if the output is too big
     num_frames = 24
 
-    horiz_displace_px = int(img.width * (horiz_displace_pct/100.0))
-    vert_displace_px = int(img.height * (vert_displace_pct/100.0))
+    w, h = img.get_width(), img.get_height()
+    horiz_displace_px = int(w * (horiz_displace_pct / 100.0))
+    vert_displace_px = int(h * (vert_displace_pct / 100.0))
 
-    img.disable_undo()
-    # Make copies of the base layer
+    img.undo_disable()
+    layers = _layers_top_to_bottom(img)
     delta_x = randint(-horiz_displace_px, horiz_displace_px)
     delta_y = randint(-vert_displace_px, vert_displace_px)
     for _ in range(1, num_frames):
-        layer = pdb.gimp_layer_copy(img.layers[-1], False) # Don't add transparency
-        img.add_layer(layer)
-        pdb.gimp_item_transform_translate(
-            img.layers[0],
-            delta_x,
-            delta_y,
-        )
-        # Prevent the next frame being too close to the current one
+        bottom = _layers_top_to_bottom(img)[-1]
+        layer = bottom.copy()
+        _insert_layer_top(img, layer)
+        top = _layers_top_to_bottom(img)[0]
+        top.transform_translate(float(delta_x), float(delta_y))
         next_delta_x = randint(-horiz_displace_px, horiz_displace_px)
         next_delta_y = randint(-vert_displace_px, vert_displace_px)
-        while abs(next_delta_x - delta_x) < horiz_displace_px * 0.15 and abs(next_delta_y - delta_y) < vert_displace_px * 0.15:
+        while (
+            abs(next_delta_x - delta_x) < horiz_displace_px * 0.15
+            and abs(next_delta_y - delta_y) < vert_displace_px * 0.15
+        ):
             next_delta_x = randint(-horiz_displace_px, horiz_displace_px)
             next_delta_y = randint(-vert_displace_px, vert_displace_px)
         delta_x, delta_y = next_delta_x, next_delta_y
 
-    pdb.gimp_image_crop(img, img.width, img.height, 0, 0)
+    img.crop(img.get_width(), img.get_height(), 0, 0)
 
-    # Image, no dithering, make optimal palette, # colors, dither alpha channel,
-    # remove unused colors (ignored), name of custom palette (ignored)
-    pdb.gimp_image_convert_indexed(img, 0, 0, num_colors, False, False, "")
-    drw = pdb.gimp_image_get_active_drawable(img)
-    # Image, drawable, filename, raw filename, interlaced, loop forever, ms between frames, replace frames
-    pdb.file_gif_save(img, drw, outfile, outfile, 0, 1, frame_time_ms, replacement_policy, run_mode=1)
+    img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
+    img.delete()
 
-def party(inFile):
-    img = pdb.file_png_load(inFile, 1)
-    outfile = outputFilename(inFile, "party")
+
+def party(in_file: str) -> None:
+    img = _load_png(in_file)
+    outfile = output_filename(in_file, "party")
     rotate = True
-    party = False
-    polarity = 1  # Use -1 to reverse direction of spin/colors
-    replacement_policy = 2 # 1=combine, 2=replace
+    hue_party = False
+    polarity = 1
+    replace_frames = True
 
-    # Tune these if the output is too big
     num_steps = 24
 
-    img.disable_undo()
+    img.undo_disable()
     for step in range(0, num_steps):
-        layer = pdb.gimp_layer_copy(img.layers[-1], False) # Don't add transparency
-        img.add_layer(layer)
+        bottom = _layers_top_to_bottom(img)[-1]
+        layer = bottom.copy()
+        _insert_layer_top(img, layer)
         if rotate:
-            # Item, radians, auto center, center x coords (ignored), center y coords (ignored)
-            pdb.gimp_item_transform_rotate(layer, polarity*step/float(num_steps)*2*3.1415926535, True, 0, 0)
-        if party:
-            # Item, hue (degrees), saturation, lightness
+            layer.transform_rotate(
+                polarity * step / float(num_steps) * 2 * math.pi,
+                True,
+                0.0,
+                0.0,
+            )
+        if hue_party:
             if polarity == 1:
-                pdb.gimp_drawable_colorize_hsl(layer, (step/float(num_steps)*360 + 50) % 360, 100, 0)
+                layer.colorize_hsl((step / float(num_steps) * 360 + 50) % 360, 100.0, 0.0)
             else:
-                pdb.gimp_drawable_colorize_hsl(layer, (360 - step/float(num_steps)*360 + 50) % 360, 100, 0)
+                layer.colorize_hsl((360 - step / float(num_steps) * 360 + 50) % 360, 100.0, 0.0)
 
-    # delete the original layer
-    img.remove_layer(img.layers[-1])
+    bottom = _layers_top_to_bottom(img)[-1]
+    img.remove_layer(bottom)
 
-    # Image, no dithering, make optimal palette, # colors, dither alpha channel,
-    # remove unused colors (ignored), name of custom palette (ignored)
-    pdb.gimp_image_convert_indexed(img, 0, 0, num_colors, False, False, "")
-    drw = pdb.gimp_image_get_active_drawable(img)
-    # Image, drawable, filename, raw filename, interlaced, loop forever, ms between frames, replace frames
-    pdb.file_gif_save(img, drw, outfile, outfile, 0, 1, 60, replacement_policy, run_mode=1)
+    img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(img, outfile, 60, replace_frames)
+    img.delete()
 
-def conga(inFile):
-    img = pdb.file_png_load(inFile, 1)
+
+def conga(in_file: str) -> None:
+    img = _load_png(in_file)
     LEFT = "left"
     RIGHT = "right"
     UP = "up"
     DOWN = "down"
 
     direction = RIGHT
-    step_size_px = 8 # For best results, this should be a factor of the image direction where the slide is happening
-    frame_time_ms = 40 # Must be multiple of 10 per the GIF standard
-    replacement_policy = 2 # 1=combine, 2=replace
+    step_size_px = 8
+    frame_time_ms = 40
+    replace_frames = True
 
-    outfile = outputFilename(inFile, "conga")
-    orig_width, orig_height = img.width, img.height
-
+    outfile = output_filename(in_file, "conga")
+    orig_width, orig_height = img.get_width(), img.get_height()
 
     if direction in (LEFT, RIGHT):
-        num_steps = img.width // step_size_px
+        num_steps = orig_width // step_size_px
     elif direction in (UP, DOWN):
-        num_steps = img.height // step_size_px
+        num_steps = orig_height // step_size_px
     else:
-        assert False, "Invalid slide direction %s" % direction
+        raise AssertionError("Invalid slide direction %s" % direction)
 
-    img.disable_undo()
-    drw = pdb.gimp_image_active_drawable(img)
+    img.undo_disable()
+    layers = _layers_top_to_bottom(img)
+    drw = layers[0]
 
-    pdb.plug_in_tile(img, drw, 3*img.width, 3*img.height, False) # image, drawable, new width, new height, don't create new image
+    _plug_in_tile(img, drw, 3 * orig_width, 3 * orig_height, False)
 
-    # Make 3 copies of the base layer
     for i in range(1, num_steps):
-        layer = pdb.gimp_layer_copy(img.layers[-1], False) # Don't add transparency
+        bottom = _layers_top_to_bottom(img)[-1]
+        layer = bottom.copy()
         if direction == LEFT:
-            translated_layer = pdb.gimp_item_transform_translate(layer, -step_size_px * i, 0)
+            translated = layer.transform_translate(float(-step_size_px * i), 0.0)
         elif direction == RIGHT:
-            translated_layer = pdb.gimp_item_transform_translate(layer, step_size_px * i, 0)
+            translated = layer.transform_translate(float(step_size_px * i), 0.0)
         elif direction == UP:
-            translated_layer = pdb.gimp_item_transform_translate(layer, 0, -step_size_px * i)
-        elif direction == DOWN:
-            translated_layer = pdb.gimp_item_transform_translate(layer, 0, step_size_px * i)
-        img.add_layer(translated_layer)
+            translated = layer.transform_translate(0.0, float(-step_size_px * i))
+        else:
+            translated = layer.transform_translate(0.0, float(step_size_px * i))
+        _insert_layer_top(img, translated)
 
-    pdb.gimp_image_crop(img, orig_width, orig_height, orig_width, orig_height)
+    img.crop(orig_width, orig_height, orig_width, orig_height)
 
-    # Image, no dithering, make optimal palette, # colors, dither alpha channel,
-    # remove unused colors (ignored), name of custom palette (ignored)
-    pdb.gimp_image_convert_indexed(img, 0, 0, num_colors, False, False, "")
-    drw = pdb.gimp_image_get_active_drawable(img)
-    # Image, drawable, filename, raw filename, interlaced, loop forever, ms between frames, replace frames
-    pdb.file_gif_save(img, drw, outfile, outfile, 0, 1, frame_time_ms, replacement_policy, run_mode=1)
+    img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
+    img.delete()
 
-def run(inFile):
-    intensifies(inFile)
-    party(inFile)
-    conga(inFile)
+
+def run(in_file: str) -> None:
+    Gegl.init(None)
+    intensifies(in_file)
+    party(in_file)
+    conga(in_file)
