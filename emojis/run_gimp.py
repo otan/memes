@@ -223,15 +223,15 @@ def conga(in_file: str) -> None:
     for i in range(1, num_steps):
         bottom = _layers_top_to_bottom(img)[-1]
         layer = bottom.copy()
+        _insert_layer_top(img, layer)
         if direction == LEFT:
-            translated = layer.transform_translate(float(-step_size_px * i), 0.0)
+            layer.set_offsets(-step_size_px * i, 0)
         elif direction == RIGHT:
-            translated = layer.transform_translate(float(step_size_px * i), 0.0)
+            layer.set_offsets(step_size_px * i, 0)
         elif direction == UP:
-            translated = layer.transform_translate(0.0, float(-step_size_px * i))
+            layer.set_offsets(0, -step_size_px * i)
         else:
-            translated = layer.transform_translate(0.0, float(step_size_px * i))
-        _insert_layer_top(img, translated)
+            layer.set_offsets(0, step_size_px * i)
 
     img.crop(orig_width, orig_height, orig_width, orig_height)
 
