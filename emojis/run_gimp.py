@@ -93,6 +93,89 @@ def _plug_in_tile(image: Gimp.Image, drawable: Gimp.Drawable, new_w: int, new_h:
         raise RuntimeError(f"plug-in-tile failed: {err}")
 
 
+def _export_png(image: Gimp.Image, outfile: str) -> None:
+    proc = Gimp.get_pdb().lookup_procedure("file-png-export")
+    if proc is None:
+        raise RuntimeError("file-png-export procedure not found")
+    config = proc.create_config()
+    config.set_property("run-mode", Gimp.RunMode.NONINTERACTIVE)
+    config.set_property("image", image)
+    config.set_property("file", Gio.File.new_for_path(outfile))
+    arg_names = {p.name for p in proc.get_arguments()}
+    if "options" in arg_names:
+        config.set_property("options", None)
+    if "metadata" in arg_names:
+        config.set_property("metadata", None)
+    result = proc.run(config)
+    if result.index(0) != Gimp.PDBStatusType.SUCCESS:
+        err = result.index(1) if result.get_n_values() > 1 else "unknown error"
+        raise RuntimeError(f"file-png-export failed for {outfile}: {err}")
+
+
+def _preprocess_to_64x64(in_file: str) -> str:
+    """Crop to the smallest square around non-transparent content, then scale to 64x64."""
+    img = _load_png(in_file)
+    img.undo_disable()
+    pdb = Gimp.get_pdb()
+    layer = img.get_layers()[0]
+
+    if not layer.has_alpha():
+        layer.add_alpha()
+
+    proc = pdb.lookup_procedure("gimp-image-select-item")
+    cfg = proc.create_config()
+    cfg.set_property("image", img)
+    cfg.set_property("operation", Gimp.ChannelOps.REPLACE)
+    cfg.set_property("item", layer)
+    proc.run(cfg)
+
+    proc = pdb.lookup_procedure("gimp-selection-bounds")
+    cfg = proc.create_config()
+    cfg.set_property("image", img)
+    result = proc.run(cfg)
+    non_empty = result.index(1)
+    if non_empty:
+        x1, y1, x2, y2 = result.index(2), result.index(3), result.index(4), result.index(5)
+    else:
+        x1, y1, x2, y2 = 0, 0, img.get_width(), img.get_height()
+
+    bw, bh = x2 - x1, y2 - y1
+    side = max(bw, bh)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    sq_x = int(cx - side / 2.0)
+    sq_y = int(cy - side / 2.0)
+
+    iw, ih = img.get_width(), img.get_height()
+    pad_l = max(0, -sq_x)
+    pad_t = max(0, -sq_y)
+    pad_r = max(0, sq_x + side - iw)
+    pad_b = max(0, sq_y + side - ih)
+    if pad_l or pad_t or pad_r or pad_b:
+        img.resize(iw + pad_l + pad_r, ih + pad_t + pad_b, pad_l, pad_t)
+        layer.resize_to_image_size()
+        sq_x += pad_l
+        sq_y += pad_t
+
+    img.crop(side, side, sq_x, sq_y)
+
+    proc = pdb.lookup_procedure("gimp-image-scale")
+    cfg = proc.create_config()
+    cfg.set_property("image", img)
+    cfg.set_property("new-width", 64)
+    cfg.set_property("new-height", 64)
+    proc.run(cfg)
+
+    proc = pdb.lookup_procedure("gimp-selection-none")
+    cfg = proc.create_config()
+    cfg.set_property("image", img)
+    proc.run(cfg)
+
+    out = os.path.splitext(in_file)[0] + "-64.png"
+    _export_png(img, out)
+    img.delete()
+    return out
+
+
 def _layers_top_to_bottom(img: Gimp.Image):
     return img.get_layers()
 
@@ -101,9 +184,8 @@ def _insert_layer_top(img: Gimp.Image, layer: Gimp.Layer) -> None:
     img.insert_layer(layer, None, 0)
 
 
-def intensifies(in_file: str) -> None:
+def intensifies(in_file: str, outfile: str) -> None:
     img = _load_png(in_file)
-    outfile = output_filename(in_file, "intensifies")
     horiz_displace_pct = 17
     vert_displace_pct = 17
     frame_time_ms = 20
@@ -149,9 +231,8 @@ def intensifies(in_file: str) -> None:
     img.delete()
 
 
-def party(in_file: str) -> None:
+def party(in_file: str, outfile: str) -> None:
     img = _load_png(in_file)
-    outfile = output_filename(in_file, "party")
     rotate = True
     hue_party = False
     polarity = 1
@@ -192,7 +273,7 @@ def party(in_file: str) -> None:
     img.delete()
 
 
-def conga(in_file: str) -> None:
+def conga(in_file: str, outfile: str) -> None:
     img = _load_png(in_file)
     LEFT = "left"
     RIGHT = "right"
@@ -203,8 +284,6 @@ def conga(in_file: str) -> None:
     step_size_px = 8
     frame_time_ms = 40
     replace_frames = True
-
-    outfile = output_filename(in_file, "conga")
     orig_width, orig_height = img.get_width(), img.get_height()
 
     if direction in (LEFT, RIGHT):
@@ -249,6 +328,7 @@ def conga(in_file: str) -> None:
 
 def run(in_file: str) -> None:
     Gegl.init(None)
-    intensifies(in_file)
-    party(in_file)
-    conga(in_file)
+    processed = _preprocess_to_64x64(in_file)
+    intensifies(processed, output_filename(in_file, "intensifies"))
+    party(processed, output_filename(in_file, "party"))
+    conga(processed, output_filename(in_file, "conga"))
