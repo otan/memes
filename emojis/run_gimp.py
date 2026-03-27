@@ -183,16 +183,28 @@ def _preprocess_to_64x64(in_file: str) -> str:
 GRID_ROWS = "ABC"  # top → bottom rows on the 192×192 source
 
 
-def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_path: str) -> None:
+def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_path: str) -> list[str]:
     """Build intensifies / party / conga / anybot GIFs from an existing 64×64 PNG."""
-    intensifies(png_64, os.path.join(out_dir, f"{basename}-intensifies.gif"))
-    party(png_64, os.path.join(out_dir, f"{basename}-party.gif"))
-    conga(png_64, os.path.join(out_dir, f"{basename}-conga.gif"))
-    anybot_page(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}.gif"))
-    anybot_page_v2(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}-intensifies.gif"))
+    paths: list[str] = []
+    paths.extend(
+        intensifies(png_64, os.path.join(out_dir, f"{basename}-intensifies.gif")),
+    )
+    paths.extend(party(png_64, os.path.join(out_dir, f"{basename}-party.gif")))
+    paths.extend(conga(png_64, os.path.join(out_dir, f"{basename}-conga.gif")))
+    paths.extend(
+        anybot_page(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}.gif")),
+    )
+    paths.extend(
+        anybot_page_v2(
+            png_64,
+            overlay_path,
+            os.path.join(out_dir, f"anybot-circle-{basename}-intensifies.gif"),
+        ),
+    )
+    return paths
 
 
-def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> None:
+def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> list[str]:
     """Preprocess the original image to 192×192, then export nine 64×64 PNG tiles.
 
     Rows are labeled A→C from top to bottom (see GRID_ROWS); columns are 0→2 left to right.
@@ -203,15 +215,19 @@ def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> None:
     img = _load_png(grid_192_path)
     img.undo_disable()
     tile = 64
+    paths: list[str] = []
     for row in range(3):
         for col in range(3):
             dup = img.duplicate()
             dup.undo_disable()
             dup.crop(tile, tile, col * tile, row * tile)
             out_name = f"{stem}-big-{GRID_ROWS[row]}-{col}.png"
-            _export_png(dup, os.path.join(out_dir, out_name))
+            out_path = os.path.join(out_dir, out_name)
+            _export_png(dup, out_path)
+            paths.append(out_path)
             dup.delete()
     img.delete()
+    return paths
 
 
 def _layer_from_drawable(pdb, drawable: Gimp.Drawable, dest_image: Gimp.Image) -> Gimp.Layer:
@@ -231,7 +247,7 @@ def _insert_layer_top(img: Gimp.Image, layer: Gimp.Layer) -> None:
     img.insert_layer(layer, None, 0)
 
 
-def intensifies(in_file: str, outfile: str) -> None:
+def intensifies(in_file: str, outfile: str) -> list[str]:
     img = _load_png(in_file)
     horiz_displace_pct = 17
     vert_displace_pct = 17
@@ -276,9 +292,10 @@ def intensifies(in_file: str, outfile: str) -> None:
     )
     _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
     img.delete()
+    return [outfile]
 
 
-def party(in_file: str, outfile: str) -> None:
+def party(in_file: str, outfile: str) -> list[str]:
     img = _load_png(in_file)
     rotate = True
     hue_party = False
@@ -318,9 +335,10 @@ def party(in_file: str, outfile: str) -> None:
     )
     _save_gif_animated(img, outfile, 60, replace_frames)
     img.delete()
+    return [outfile]
 
 
-def conga(in_file: str, outfile: str) -> None:
+def conga(in_file: str, outfile: str) -> list[str]:
     img = _load_png(in_file)
     LEFT = "left"
     RIGHT = "right"
@@ -371,9 +389,10 @@ def conga(in_file: str, outfile: str) -> None:
     )
     _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
     img.delete()
+    return [outfile]
 
 
-def conga_rtl(in_file: str, outfile: str) -> None:
+def conga_rtl(in_file: str, outfile: str) -> list[str]:
     img = _load_png(in_file)
     step_size_px = 8
     frame_time_ms = 40
@@ -405,9 +424,10 @@ def conga_rtl(in_file: str, outfile: str) -> None:
     )
     _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
     img.delete()
+    return [outfile]
 
 
-def anybot_page(in_file: str, overlay_file: str, outfile: str) -> None:
+def anybot_page(in_file: str, overlay_file: str, outfile: str) -> list[str]:
     """Small overlay orbits around the top of the emoji's head."""
     pdb = Gimp.get_pdb()
 
@@ -456,9 +476,10 @@ def anybot_page(in_file: str, overlay_file: str, outfile: str) -> None:
     )
     _save_gif_animated(out_img, outfile, frame_time_ms, True)
     out_img.delete()
+    return [outfile]
 
 
-def anybot_page_v2(in_file: str, overlay_file: str, outfile: str) -> None:
+def anybot_page_v2(in_file: str, overlay_file: str, outfile: str) -> list[str]:
     """Small overlay orbits around the top of the emoji's head while it shakes."""
     pdb = Gimp.get_pdb()
 
@@ -524,9 +545,10 @@ def anybot_page_v2(in_file: str, overlay_file: str, outfile: str) -> None:
     )
     _save_gif_animated(out_img, outfile, frame_time_ms, True)
     out_img.delete()
+    return [outfile]
 
 
-def run(in_file: str) -> None:
+def run(in_file: str) -> list[str]:
     Gegl.init(None)
     processed = _preprocess_to_64x64(in_file)
 
@@ -535,10 +557,22 @@ def run(in_file: str) -> None:
 
     in_base = os.path.splitext(os.path.basename(in_file))[0]
     in_dir = os.path.dirname(in_file)
-    generate_emoji_abc_grid_cutouts(in_file, in_dir)
-    intensifies(processed, output_filename(in_file, "intensifies"))
-    party(processed, output_filename(in_file, "party"))
-    conga(processed, output_filename(in_file, "conga"))
-    #conga_rtl(processed, output_filename(in_file, "conga-rtl"))
-    anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base)))
-    anybot_page_v2(processed, overlay, os.path.join(in_dir, "anybot-circle-{}-intensifies.gif".format(in_base)))
+    out: list[str] = []
+    out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
+    out.extend(intensifies(processed, output_filename(in_file, "intensifies")))
+    out.extend(party(processed, output_filename(in_file, "party")))
+    out.extend(conga(processed, output_filename(in_file, "conga")))
+    # out.extend(conga_rtl(processed, output_filename(in_file, "conga-rtl")))
+    out.extend(
+        anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base))),
+    )
+    out.extend(
+        anybot_page_v2(
+            processed,
+            overlay,
+            os.path.join(in_dir, "anybot-circle-{}-intensifies.gif".format(in_base)),
+        ),
+    )
+    for path in out:
+        print(f"output:{path}", flush=True)
+    return out
