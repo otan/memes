@@ -112,8 +112,8 @@ def _export_png(image: Gimp.Image, outfile: str) -> None:
         raise RuntimeError(f"file-png-export failed for {outfile}: {err}")
 
 
-def _preprocess_to_64x64(in_file: str) -> str:
-    """Crop to the smallest square around non-transparent content, then scale to 64x64."""
+def _preprocess_to_square(in_file: str, size: int) -> str:
+    """Crop to the smallest square around non-transparent content, then scale to size×size."""
     img = _load_png(in_file)
     img.undo_disable()
     pdb = Gimp.get_pdb()
@@ -161,8 +161,8 @@ def _preprocess_to_64x64(in_file: str) -> str:
     proc = pdb.lookup_procedure("gimp-image-scale")
     cfg = proc.create_config()
     cfg.set_property("image", img)
-    cfg.set_property("new-width", 64)
-    cfg.set_property("new-height", 64)
+    cfg.set_property("new-width", size)
+    cfg.set_property("new-height", size)
     proc.run(cfg)
 
     proc = pdb.lookup_procedure("gimp-selection-none")
@@ -170,10 +170,50 @@ def _preprocess_to_64x64(in_file: str) -> str:
     cfg.set_property("image", img)
     proc.run(cfg)
 
-    out = os.path.splitext(in_file)[0] + "-64.png"
+    out = os.path.splitext(in_file)[0] + f"-{size}.png"
     _export_png(img, out)
     img.delete()
     return out
+
+
+def _preprocess_to_64x64(in_file: str) -> str:
+    return _preprocess_to_square(in_file, 64)
+
+
+GRID_ROWS = "ABC"  # top → bottom rows on the 192×192 source
+
+
+def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_path: str) -> None:
+    """Build intensifies / party / conga / anybot GIFs from an existing 64×64 PNG."""
+    intensifies(png_64, os.path.join(out_dir, f"{basename}-intensifies.gif"))
+    party(png_64, os.path.join(out_dir, f"{basename}-party.gif"))
+    conga(png_64, os.path.join(out_dir, f"{basename}-conga.gif"))
+    anybot_page(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}.gif"))
+    anybot_page_v2(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}-intensifies.gif"))
+
+
+def grid_emoji_nine_from_192(processed_192: str, out_dir: str, overlay_path: str) -> None:
+    """Nine 64×64 cuts from a 192×192 square: emoji-A-0 … emoji-C-2 (rows A–C top to bottom)."""
+    cell = 192 // 3
+    for row_idx, row_letter in enumerate(GRID_ROWS):
+        for col in range(3):
+            img = _load_png(processed_192)
+            img.undo_disable()
+            img.crop(cell, cell, col * cell, row_idx * cell)
+            name = f"emoji-{row_letter}-{col}"
+            tile_png = os.path.join(out_dir, f"{name}-64.png")
+            _export_png(img, tile_png)
+            img.delete()
+            generate_variants_from_64(tile_png, name, out_dir, overlay_path)
+
+
+def _layer_from_drawable(pdb, drawable: Gimp.Drawable, dest_image: Gimp.Image) -> Gimp.Layer:
+    proc = pdb.lookup_procedure("gimp-layer-new-from-drawable")
+    cfg = proc.create_config()
+    cfg.set_property("drawable", drawable)
+    cfg.set_property("dest-image", dest_image)
+    result = proc.run(cfg)
+    return result.index(1)
 
 
 def _layers_top_to_bottom(img: Gimp.Image):
@@ -326,9 +366,171 @@ def conga(in_file: str, outfile: str) -> None:
     img.delete()
 
 
+def conga_rtl(in_file: str, outfile: str) -> None:
+    img = _load_png(in_file)
+    step_size_px = 8
+    frame_time_ms = 40
+    replace_frames = True
+    orig_width, orig_height = img.get_width(), img.get_height()
+    num_steps = orig_width // step_size_px
+
+    img.undo_disable()
+    layers = _layers_top_to_bottom(img)
+    drw = layers[0]
+
+    _plug_in_tile(img, drw, 3 * orig_width, 3 * orig_height, False)
+
+    for i in range(1, num_steps):
+        bottom = _layers_top_to_bottom(img)[-1]
+        layer = bottom.copy()
+        _insert_layer_top(img, layer)
+        layer.set_offsets(-step_size_px * i, 0)
+
+    img.crop(orig_width, orig_height, orig_width, orig_height)
+
+    img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
+    img.delete()
+
+
+def anybot_page(in_file: str, overlay_file: str, outfile: str) -> None:
+    """Small overlay orbits around the top of the emoji's head."""
+    pdb = Gimp.get_pdb()
+
+    emoji_img = _load_png(in_file)
+    emoji_src = emoji_img.get_layers()[0]
+
+    overlay_img = _load_png(overlay_file)
+    overlay_src = overlay_img.get_layers()[0]
+
+    size = 64
+    out_img = Gimp.Image.new(size, size, Gimp.ImageBaseType.RGB)
+    out_img.undo_disable()
+
+    num_frames = 24
+    frame_time_ms = 40
+    overlay_size = 20
+    orbit_cx, orbit_cy = size // 2, 16
+    orbit_rx, orbit_ry = 22, 10
+
+    for step in range(num_frames):
+        angle = 2.0 * math.pi * step / num_frames
+        ox = int(orbit_cx + orbit_rx * math.cos(angle) - overlay_size / 2)
+        oy = int(orbit_cy + orbit_ry * math.sin(angle) - overlay_size / 2)
+
+        e_layer = _layer_from_drawable(pdb, emoji_src, out_img)
+        out_img.insert_layer(e_layer, None, 0)
+        e_layer.set_offsets(0, 0)
+
+        o_layer = _layer_from_drawable(pdb, overlay_src, out_img)
+        out_img.insert_layer(o_layer, None, 0)
+        o_layer.scale(overlay_size, overlay_size, False)
+        o_layer.set_offsets(ox, oy)
+
+        out_img.merge_down(o_layer, Gimp.MergeType.CLIP_TO_IMAGE)
+
+    emoji_img.delete()
+    overlay_img.delete()
+
+    out_img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(out_img, outfile, frame_time_ms, True)
+    out_img.delete()
+
+
+def anybot_page_v2(in_file: str, overlay_file: str, outfile: str) -> None:
+    """Small overlay orbits around the top of the emoji's head while it shakes."""
+    pdb = Gimp.get_pdb()
+
+    emoji_img = _load_png(in_file)
+    emoji_src = emoji_img.get_layers()[0]
+
+    overlay_img = _load_png(overlay_file)
+    overlay_src = overlay_img.get_layers()[0]
+
+    size = 64
+    out_img = Gimp.Image.new(size, size, Gimp.ImageBaseType.RGB)
+    out_img.undo_disable()
+
+    num_frames = 24
+    frame_time_ms = 40
+    overlay_size = 20
+    orbit_cx, orbit_cy = size // 2, 16
+    orbit_rx, orbit_ry = 22, 10
+
+    horiz_displace_px = int(size * 0.17)
+    vert_displace_px = int(size * 0.17)
+    delta_x = randint(-horiz_displace_px, horiz_displace_px)
+    delta_y = randint(-vert_displace_px, vert_displace_px)
+
+    for step in range(num_frames):
+        angle = 2.0 * math.pi * step / num_frames
+        ox = int(orbit_cx + orbit_rx * math.cos(angle) - overlay_size / 2)
+        oy = int(orbit_cy + orbit_ry * math.sin(angle) - overlay_size / 2)
+
+        e_layer = _layer_from_drawable(pdb, emoji_src, out_img)
+        out_img.insert_layer(e_layer, None, 0)
+        e_layer.set_offsets(delta_x, delta_y)
+
+        o_layer = _layer_from_drawable(pdb, overlay_src, out_img)
+        out_img.insert_layer(o_layer, None, 0)
+        o_layer.scale(overlay_size, overlay_size, False)
+        o_layer.set_offsets(ox, oy)
+
+        out_img.merge_down(o_layer, Gimp.MergeType.CLIP_TO_IMAGE)
+
+        next_dx = randint(-horiz_displace_px, horiz_displace_px)
+        next_dy = randint(-vert_displace_px, vert_displace_px)
+        while (
+            abs(next_dx - delta_x) < horiz_displace_px * 0.15
+            and abs(next_dy - delta_y) < vert_displace_px * 0.15
+        ):
+            next_dx = randint(-horiz_displace_px, horiz_displace_px)
+            next_dy = randint(-vert_displace_px, vert_displace_px)
+        delta_x, delta_y = next_dx, next_dy
+
+    emoji_img.delete()
+    overlay_img.delete()
+
+    out_img.crop(size, size, 0, 0)
+
+    out_img.convert_indexed(
+        Gimp.ConvertDitherType.NONE,
+        Gimp.ConvertPaletteType.GENERATE,
+        num_colors,
+        False,
+        False,
+        "",
+    )
+    _save_gif_animated(out_img, outfile, frame_time_ms, True)
+    out_img.delete()
+
+
 def run(in_file: str) -> None:
     Gegl.init(None)
     processed = _preprocess_to_64x64(in_file)
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    overlay = os.path.join(script_dir, "anybot-removebg-preview-64.png")
+
     intensifies(processed, output_filename(in_file, "intensifies"))
     party(processed, output_filename(in_file, "party"))
     conga(processed, output_filename(in_file, "conga"))
+    #conga_rtl(processed, output_filename(in_file, "conga-rtl"))
+    in_base = os.path.splitext(os.path.basename(in_file))[0]
+    in_dir = os.path.dirname(in_file)
+    anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base)))
+    anybot_page_v2(processed, overlay, os.path.join(in_dir, "anybot-circle-{}-intensifies.gif".format(in_base)))
