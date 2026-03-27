@@ -192,19 +192,26 @@ def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_
     anybot_page_v2(png_64, overlay_path, os.path.join(out_dir, f"anybot-circle-{basename}-intensifies.gif"))
 
 
-def grid_emoji_nine_from_192(processed_192: str, out_dir: str, overlay_path: str) -> None:
-    """Nine 64×64 cuts from a 192×192 square: emoji-A-0 … emoji-C-2 (rows A–C top to bottom)."""
-    cell = 192 // 3
-    for row_idx, row_letter in enumerate(GRID_ROWS):
+def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> None:
+    """Preprocess the original image to 192×192, then export nine 64×64 PNG tiles.
+
+    Rows are labeled A→C from top to bottom (see GRID_ROWS); columns are 0→2 left to right.
+    Output basenames match the input file stem (e.g. name.png → name-A-0.png … name-C-2.png).
+    """
+    stem = os.path.splitext(os.path.basename(in_file))[0]
+    grid_192_path = _preprocess_to_square(in_file, 192)
+    img = _load_png(grid_192_path)
+    img.undo_disable()
+    tile = 64
+    for row in range(3):
         for col in range(3):
-            img = _load_png(processed_192)
-            img.undo_disable()
-            img.crop(cell, cell, col * cell, row_idx * cell)
-            name = f"emoji-{row_letter}-{col}"
-            tile_png = os.path.join(out_dir, f"{name}-64.png")
-            _export_png(img, tile_png)
-            img.delete()
-            generate_variants_from_64(tile_png, name, out_dir, overlay_path)
+            dup = img.duplicate()
+            dup.undo_disable()
+            dup.crop(tile, tile, col * tile, row * tile)
+            out_name = f"{stem}-big-{GRID_ROWS[row]}-{col}.png"
+            _export_png(dup, os.path.join(out_dir, out_name))
+            dup.delete()
+    img.delete()
 
 
 def _layer_from_drawable(pdb, drawable: Gimp.Drawable, dest_image: Gimp.Image) -> Gimp.Layer:
@@ -526,11 +533,12 @@ def run(in_file: str) -> None:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     overlay = os.path.join(script_dir, "anybot-removebg-preview-64.png")
 
+    in_base = os.path.splitext(os.path.basename(in_file))[0]
+    in_dir = os.path.dirname(in_file)
+    generate_emoji_abc_grid_cutouts(in_file, in_dir)
     intensifies(processed, output_filename(in_file, "intensifies"))
     party(processed, output_filename(in_file, "party"))
     conga(processed, output_filename(in_file, "conga"))
     #conga_rtl(processed, output_filename(in_file, "conga-rtl"))
-    in_base = os.path.splitext(os.path.basename(in_file))[0]
-    in_dir = os.path.dirname(in_file)
     anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base)))
     anybot_page_v2(processed, overlay, os.path.join(in_dir, "anybot-circle-{}-intensifies.gif".format(in_base)))
