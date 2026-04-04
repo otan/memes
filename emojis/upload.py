@@ -78,12 +78,12 @@ OUTPUT_PREFIX = "output:"
 def _retry_delay_seconds(headers) -> float:
     retry_after = headers.get("Retry-After")
     if not retry_after:
-        return 1.0
+        return 10.0
 
     try:
-        return max(float(retry_after), 1.0)
+        return min(float(retry_after), 10.0)
     except ValueError:
-        return 1.0
+        return 10.0
 
 
 def _mime_for_path(path: str) -> str:
