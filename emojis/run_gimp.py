@@ -558,10 +558,10 @@ def run(in_file: str) -> list[str]:
     in_base = os.path.splitext(os.path.basename(in_file))[0]
     in_dir = os.path.dirname(in_file)
     out: list[str] = []
-    out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
     out.extend(intensifies(processed, output_filename(in_file, "intensifies")))
     out.extend(party(processed, output_filename(in_file, "party")))
     out.extend(conga(processed, output_filename(in_file, "conga")))
+    out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
     # out.extend(conga_rtl(processed, output_filename(in_file, "conga-rtl")))
     out.extend(
         anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base))),
