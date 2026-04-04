@@ -240,13 +240,24 @@ def _print_slack_grid(name: str, variant: str, rows: int, cols: int) -> None:
         print(aliases, flush=True)
 
 
-def _print_slack_grids(stem: str) -> None:
-    print("slack:normal", flush=True)
+def _print_slack_normal_grid(name: str, label: str, variant: str) -> None:
+    safe_name = _slack_emoji_name(name)
+    print(f"slack:{label}", flush=True)
     for row_label in _grid_row_labels(3).lower():
-        aliases = "".join(f":{_slack_emoji_name(stem)}-big-{row_label}-{col}:" for col in range(3))
+        aliases = "".join(
+            f":{safe_name}-{variant}-{row_label}-{col}:"
+            for col in range(3)
+        )
         print(aliases, flush=True)
+
+
+def _print_slack_grids(stem: str) -> None:
+    _print_slack_normal_grid(stem, "normal", "big")
+    _print_slack_normal_grid(stem, "normal-intensifies", "big-intensifies")
     _print_slack_grid(stem, "wide", 2, 5)
+    _print_slack_grid(stem, "wide-intensifies", 2, 5)
     _print_slack_grid(stem, "tall", 5, 2)
+    _print_slack_grid(stem, "tall-intensifies", 5, 2)
 
 
 def generate_grid_cutouts(in_file: str, out_dir: str, variant: str, rows: int, cols: int) -> list[str]:
@@ -296,8 +307,7 @@ def _insert_layer_top(img: Gimp.Image, layer: Gimp.Layer) -> None:
     img.insert_layer(layer, None, 0)
 
 
-def intensifies(in_file: str, outfile: str) -> list[str]:
-    img = _load_png(in_file)
+def _apply_intensifies(img: Gimp.Image) -> tuple[int, bool]:
     horiz_displace_pct = 17
     vert_displace_pct = 17
     frame_time_ms = 20
@@ -330,7 +340,12 @@ def intensifies(in_file: str, outfile: str) -> list[str]:
         delta_x, delta_y = next_delta_x, next_delta_y
 
     img.crop(img.get_width(), img.get_height(), 0, 0)
+    return frame_time_ms, replace_frames
 
+
+def intensifies(in_file: str, outfile: str) -> list[str]:
+    img = _load_png(in_file)
+    frame_time_ms, replace_frames = _apply_intensifies(img)
     img.convert_indexed(
         Gimp.ConvertDitherType.NONE,
         Gimp.ConvertPaletteType.GENERATE,
@@ -342,6 +357,48 @@ def intensifies(in_file: str, outfile: str) -> list[str]:
     _save_gif_animated(img, outfile, frame_time_ms, replace_frames)
     img.delete()
     return [outfile]
+
+
+def generate_intensified_grid_cutouts(
+    in_file: str,
+    out_dir: str,
+    variant: str,
+    rows: int,
+    cols: int,
+) -> list[str]:
+    """Stretch the emoji to a rows×cols 64px grid, intensify it, then export each tile as a GIF."""
+    stem = os.path.splitext(os.path.basename(in_file))[0]
+    tile = 64
+    row_labels = _grid_row_labels(rows)
+    grid_path = _preprocess_to_dimensions(in_file, cols * tile, rows * tile)
+    img = _load_png(grid_path)
+    img.undo_disable()
+    frame_time_ms, replace_frames = _apply_intensifies(img)
+
+    paths: list[str] = []
+    for row in range(rows):
+        for col in range(cols):
+            dup = img.duplicate()
+            dup.undo_disable()
+            dup.crop(tile, tile, col * tile, row * tile)
+            dup.convert_indexed(
+                Gimp.ConvertDitherType.NONE,
+                Gimp.ConvertPaletteType.GENERATE,
+                num_colors,
+                False,
+                False,
+                "",
+            )
+            out_name = f"{stem}-{variant}-{row_labels[row]}-{col}.gif"
+            out_path = os.path.join(out_dir, out_name)
+            _save_gif_animated(dup, out_path, frame_time_ms, replace_frames)
+            paths.append(out_path)
+            dup.delete()
+
+    img.delete()
+    if os.path.exists(grid_path):
+        os.remove(grid_path)
+    return paths
 
 
 def party(in_file: str, outfile: str) -> list[str]:
@@ -611,8 +668,11 @@ def run(in_file: str) -> list[str]:
     out.extend(party(processed, output_filename(in_file, "party")))
     out.extend(conga(processed, output_filename(in_file, "conga")))
     out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
+    out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "big-intensifies", 3, 3))
     out.extend(generate_grid_cutouts(in_file, in_dir, "wide", 2, 5))
+    out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "wide-intensifies", 2, 5))
     out.extend(generate_grid_cutouts(in_file, in_dir, "tall", 5, 2))
+    out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "tall-intensifies", 5, 2))
     # out.extend(conga_rtl(processed, output_filename(in_file, "conga-rtl")))
     out.extend(
         anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base))),
