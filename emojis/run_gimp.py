@@ -112,8 +112,8 @@ def _export_png(image: Gimp.Image, outfile: str) -> None:
         raise RuntimeError(f"file-png-export failed for {outfile}: {err}")
 
 
-def _preprocess_to_square(in_file: str, size: int) -> str:
-    """Crop to the smallest square around non-transparent content, then scale to size×size."""
+def _crop_to_square_image(in_file: str) -> Gimp.Image:
+    """Crop to the smallest square around non-transparent content."""
     img = _load_png(in_file)
     img.undo_disable()
     pdb = Gimp.get_pdb()
@@ -158,29 +158,42 @@ def _preprocess_to_square(in_file: str, size: int) -> str:
 
     img.crop(side, side, sq_x, sq_y)
 
-    proc = pdb.lookup_procedure("gimp-image-scale")
-    cfg = proc.create_config()
-    cfg.set_property("image", img)
-    cfg.set_property("new-width", size)
-    cfg.set_property("new-height", size)
-    proc.run(cfg)
-
     proc = pdb.lookup_procedure("gimp-selection-none")
     cfg = proc.create_config()
     cfg.set_property("image", img)
     proc.run(cfg)
 
-    out = os.path.splitext(in_file)[0] + f"-{size}.png"
+    return img
+
+
+def _preprocess_to_dimensions(in_file: str, width: int, height: int) -> str:
+    """Crop to a square around the subject, then scale to the requested size."""
+    img = _crop_to_square_image(in_file)
+    pdb = Gimp.get_pdb()
+
+    proc = pdb.lookup_procedure("gimp-image-scale")
+    cfg = proc.create_config()
+    cfg.set_property("image", img)
+    cfg.set_property("new-width", width)
+    cfg.set_property("new-height", height)
+    proc.run(cfg)
+
+    suffix = f"-{width}.png" if width == height else f"-{width}x{height}.png"
+    out = os.path.splitext(in_file)[0] + suffix
     _export_png(img, out)
     img.delete()
     return out
+
+
+def _preprocess_to_square(in_file: str, size: int) -> str:
+    return _preprocess_to_dimensions(in_file, size, size)
 
 
 def _preprocess_to_64x64(in_file: str) -> str:
     return _preprocess_to_square(in_file, 64)
 
 
-GRID_ROWS = "ABC"  # top → bottom rows on the 192×192 source
+GRID_ROWS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_path: str) -> list[str]:
@@ -204,30 +217,66 @@ def generate_variants_from_64(png_64: str, basename: str, out_dir: str, overlay_
     return paths
 
 
-def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> list[str]:
-    """Preprocess the original image to 192×192, then export nine 64×64 PNG tiles.
+def _grid_row_labels(num_rows: int) -> str:
+    if num_rows > len(GRID_ROWS):
+        raise ValueError(f"Only supports up to {len(GRID_ROWS)} rows, got {num_rows}")
+    return GRID_ROWS[:num_rows]
 
-    Rows are labeled A→C from top to bottom (see GRID_ROWS); columns are 0→2 left to right.
-    Output basenames match the input file stem (e.g. name.png → name-A-0.png … name-C-2.png).
-    """
+
+def _slack_emoji_name(name: str) -> str:
+    cleaned = "".join(c if c.isalnum() or c in "_-" else "-" for c in name.lower())
+    return cleaned.strip("_-") or "emoji"
+
+
+def _print_slack_grid(name: str, variant: str, rows: int, cols: int) -> None:
+    safe_name = _slack_emoji_name(name)
+    row_labels = _grid_row_labels(rows).lower()
+    print(f"slack:{variant}", flush=True)
+    for row_label in row_labels:
+        aliases = "".join(
+            f":{safe_name}-{variant}-{row_label}-{col}:"
+            for col in range(cols)
+        )
+        print(aliases, flush=True)
+
+
+def _print_slack_grids(stem: str) -> None:
+    print("slack:normal", flush=True)
+    for row_label in _grid_row_labels(3).lower():
+        aliases = "".join(f":{_slack_emoji_name(stem)}-big-{row_label}-{col}:" for col in range(3))
+        print(aliases, flush=True)
+    _print_slack_grid(stem, "wide", 2, 5)
+    _print_slack_grid(stem, "tall", 5, 2)
+
+
+def generate_grid_cutouts(in_file: str, out_dir: str, variant: str, rows: int, cols: int) -> list[str]:
+    """Stretch the emoji to a rows×cols 64px grid, then export each tile as a PNG."""
     stem = os.path.splitext(os.path.basename(in_file))[0]
-    grid_192_path = _preprocess_to_square(in_file, 192)
-    img = _load_png(grid_192_path)
-    img.undo_disable()
     tile = 64
+    row_labels = _grid_row_labels(rows)
+    grid_path = _preprocess_to_dimensions(in_file, cols * tile, rows * tile)
+    img = _load_png(grid_path)
+    img.undo_disable()
     paths: list[str] = []
-    for row in range(3):
-        for col in range(3):
+    for row in range(rows):
+        for col in range(cols):
             dup = img.duplicate()
             dup.undo_disable()
             dup.crop(tile, tile, col * tile, row * tile)
-            out_name = f"{stem}-big-{GRID_ROWS[row]}-{col}.png"
+            out_name = f"{stem}-{variant}-{row_labels[row]}-{col}.png"
             out_path = os.path.join(out_dir, out_name)
             _export_png(dup, out_path)
             paths.append(out_path)
             dup.delete()
     img.delete()
+    if os.path.exists(grid_path):
+        os.remove(grid_path)
     return paths
+
+
+def generate_emoji_abc_grid_cutouts(in_file: str, out_dir: str) -> list[str]:
+    """Export the existing 3×3 stretched grid cutouts named as big variants."""
+    return generate_grid_cutouts(in_file, out_dir, "big", 3, 3)
 
 
 def _layer_from_drawable(pdb, drawable: Gimp.Drawable, dest_image: Gimp.Image) -> Gimp.Layer:
@@ -562,6 +611,8 @@ def run(in_file: str) -> list[str]:
     out.extend(party(processed, output_filename(in_file, "party")))
     out.extend(conga(processed, output_filename(in_file, "conga")))
     out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
+    out.extend(generate_grid_cutouts(in_file, in_dir, "wide", 2, 5))
+    out.extend(generate_grid_cutouts(in_file, in_dir, "tall", 5, 2))
     # out.extend(conga_rtl(processed, output_filename(in_file, "conga-rtl")))
     out.extend(
         anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base))),
@@ -575,4 +626,5 @@ def run(in_file: str) -> list[str]:
     )
     for path in out:
         print(f"output:{path}", flush=True)
+    _print_slack_grids(in_base)
     return out
