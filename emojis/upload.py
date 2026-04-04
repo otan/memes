@@ -67,11 +67,23 @@ import json
 import mimetypes
 import os
 import sys
+import time
 import uuid
 import urllib.error
 import urllib.request
 
 OUTPUT_PREFIX = "output:"
+
+
+def _retry_delay_seconds(headers) -> float:
+    retry_after = headers.get("Retry-After")
+    if not retry_after:
+        return 1.0
+
+    try:
+        return max(float(retry_after), 1.0)
+    except ValueError:
+        return 1.0
 
 
 def _mime_for_path(path: str) -> str:
@@ -172,13 +184,23 @@ def _emoji_add(
         },
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            payload = resp.read().decode()
-    except urllib.error.HTTPError as e:
-        return False, f"HTTP {e.code}: {e.read().decode(errors='replace')}"
-    except urllib.error.URLError as e:
-        return False, str(e.reason)
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                payload = resp.read().decode()
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                delay = _retry_delay_seconds(e.headers)
+                print(
+                    f"rate limited for {name}; retrying in {delay:g}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            return False, f"HTTP {e.code}: {e.read().decode(errors='replace')}"
+        except urllib.error.URLError as e:
+            return False, str(e.reason)
+        break
 
     try:
         data = json.loads(payload)
@@ -257,18 +279,17 @@ def main() -> int:
         if not path:
             print(f"Empty path after {OUTPUT_PREFIX!r}: {arg!r}", file=sys.stderr)
             failed += 1
-            continue
-        if not os.path.isfile(path):
+        elif not os.path.isfile(path):
             print(f"Not a file: {path}", file=sys.stderr)
             failed += 1
-            continue
-        name = _emoji_name(path)
-        ok, msg = _emoji_add(workspace, d_val, xoxc, name, path)
-        if ok:
-            print(f"ok: {name}")
         else:
-            print(f"fail: {path} ({name}): {msg}", file=sys.stderr)
-            failed += 1
+            name = _emoji_name(path)
+            ok, msg = _emoji_add(workspace, d_val, xoxc, name, path)
+            if ok:
+                print(f"ok: {name}")
+            else:
+                print(f"fail: {path} ({name}): {msg}", file=sys.stderr)
+                failed += 1
     return 1 if failed else 0
 
 
