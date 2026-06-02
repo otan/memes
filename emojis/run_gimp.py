@@ -254,10 +254,10 @@ def _print_slack_normal_grid(name: str, label: str, variant: str) -> None:
 def _print_slack_grids(stem: str) -> None:
     _print_slack_normal_grid(stem, "normal", "big")
     _print_slack_normal_grid(stem, "normal-intensifies", "big-intensifies")
-    _print_slack_grid(stem, "wide", 2, 5)
-    _print_slack_grid(stem, "wide-intensifies", 2, 5)
-    _print_slack_grid(stem, "tall", 5, 2)
-    _print_slack_grid(stem, "tall-intensifies", 5, 2)
+    # _print_slack_grid(stem, "wide", 2, 5)
+    # _print_slack_grid(stem, "wide-intensifies", 2, 5)
+    # _print_slack_grid(stem, "tall", 5, 2)
+    # _print_slack_grid(stem, "tall-intensifies", 5, 2)
 
 
 def generate_grid_cutouts(in_file: str, out_dir: str, variant: str, rows: int, cols: int) -> list[str]:
@@ -669,10 +669,10 @@ def run(in_file: str) -> list[str]:
     out.extend(conga(processed, output_filename(in_file, "conga")))
     out.extend(generate_emoji_abc_grid_cutouts(in_file, in_dir))
     out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "big-intensifies", 3, 3))
-    out.extend(generate_grid_cutouts(in_file, in_dir, "wide", 2, 5))
-    out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "wide-intensifies", 2, 5))
-    out.extend(generate_grid_cutouts(in_file, in_dir, "tall", 5, 2))
-    out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "tall-intensifies", 5, 2))
+    # out.extend(generate_grid_cutouts(in_file, in_dir, "wide", 2, 5))
+    # out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "wide-intensifies", 2, 5))
+    # out.extend(generate_grid_cutouts(in_file, in_dir, "tall", 5, 2))
+    # out.extend(generate_intensified_grid_cutouts(in_file, in_dir, "tall-intensifies", 5, 2))
     # out.extend(conga_rtl(processed, output_filename(in_file, "conga-rtl")))
     out.extend(
         anybot_page(processed, overlay, os.path.join(in_dir, "anybot-circle-{}.gif".format(in_base))),
