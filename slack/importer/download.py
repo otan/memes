@@ -16,8 +16,10 @@ Environment variables (optional): ``SLACK_TOKEN``, ``SLACK_WORKSPACE``,
 ``SLACK_D_COOKIE``, ``SLACK_XOXC``, ``SLACK_AUTH_JSON``.
 
 Alias emoji (``alias:othername``) are recorded in ``aliases.json`` and not
-downloaded. Image files are named ``{emoji-name}.{ext}``. Existing images
-are left alone (any matching extension) unless ``--force`` is passed.
+downloaded. Image files are named ``{emoji-name}.{ext}``, including names that
+end with ``_`` (e.g. ``sus_`` → ``sus_.png``), so they do not collide with a
+sibling emoji like ``sus``. Existing images are left alone (any matching
+extension) unless ``--force`` is passed.
 
 Usage::
 
@@ -80,8 +82,10 @@ def _parse_d_cookie(cookie: str) -> str:
 
 
 def _safe_name(name: str) -> str:
+    # Preserve leading/trailing ``_`` and ``-`` from the Slack name so ``sus_``
+    # and ``sus`` map to different files (``sus_.png`` vs ``sus.png``).
     cleaned = "".join(c if c.isalnum() or c in "_-" else "-" for c in name)
-    return cleaned.strip("_-") or "emoji"
+    return cleaned or "emoji"
 
 
 def _ext_from_url(url: str) -> str:

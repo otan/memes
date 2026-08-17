@@ -81,8 +81,9 @@ def _parse_d_cookie(cookie: str) -> str:
 def _emoji_name(path: str) -> str:
     base = os.path.basename(path)
     stem = os.path.splitext(base)[0]
+    # Preserve leading/trailing ``_`` / ``-`` so ``sus_.png`` uploads as ``sus_``.
     cleaned = "".join(c if c.isalnum() or c in "_-" else "-" for c in stem.lower())
-    return cleaned.strip("_-") or "emoji"
+    return cleaned or "emoji"
 
 
 def _multipart_body(
